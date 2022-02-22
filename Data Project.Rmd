@@ -1,0 +1,95 @@
+---
+title: "Data Project"
+author: Nuoya Zheng
+output: html_document
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data Preparation
+
+```{r}
+#Load relevant library
+library(vtable)
+library(tidyverse)
+library(dplyr)
+library(purrr)
+library(lubridate)
+library(jtools)
+library(haven)
+
+# Load Most Recent Cohorts Scorecard Elements Data
+MRCSED<- read_csv("Most+Recent+Cohorts+(Scorecard+Elements).csv")
+
+# Load ID Name Link Data
+ID_N <- read_csv("id_name_link.csv")
+
+# Generate a list total of 12 files Load Google Trends Data
+Trends_FL <- list.files(path = "Noah",  pattern = "trends_up_to_", full.names = TRUE) %>% lapply(read_csv) %>%bind_rows
+
+
+ID_N <-ID_N %>% group_by (schname) %>% mutate(N =n()) %>% filter (N==1)
+
+#Convert the earning variable to numeric
+MRCSED$"md_earn_wne_p10-REPORTED-EARNINGS" = as.numeric(as.character(MRCSED$"md_earn_wne_p10-REPORTED-EARNINGS"))
+
+#Rename OPEID in ID for join purpose
+names(ID_N)[names(ID_N) == 'opeid'] <- 'OPEID'
+
+#Join ID and ggtrend
+trendID <- ID_N %>% left_join(Trends_FL, by = 'schname')
+
+#Rename unitid to UNITID in order to join
+trendID  = rename(trendID ,  UNITID = unitid)
+
+#Join trendID with MRCSED
+indexScore <-trendID %>% left_join(MRCSED, by = c('UNITID'= 'UNITID','OPEID'='OPEID'))
+
+# Filter out the predominantly grant bachelor colleges
+indexScore <-indexScore %>% filter (PREDDEG == 3,na.rm=TRUE)
+
+# Rename md_earn_wne_p10-REPORTED-EARNINGS to median_salary
+names(indexScore)[names(indexScore) == 'md_earn_wne_p10-REPORTED-EARNINGS'] <- 'median_salary'
+
+#Standardize the Index, and Group the data by Month and UNITID
+indexScore_grouped <- indexScore %>% mutate (date = as.Date(str_sub (monthorweek,1,10))) %>%
+  group_by (schname, keyword) %>%
+  group_by (month = floor_date(date,"month"), OPEID, median_salary) %>%
+  summarize(index = mean (index, na.rm = FALSE))
+
+#Checking for error
+sum(is.na(indexScore_grouped))
+indexScore_grouped <- drop_na(indexScore_grouped )
+sum(is.na(indexScore_grouped))
+
+```
+
+## Building Regression
+```{r}
+
+indexScore_grouped <- indexScore_grouped %>% 
+  mutate (treated = median_salary >= 50000, post_treatment = month >= as.Date("2015-10-01"))
+
+model <- lm(index ~ treated * post_treatment  , data = indexScore_grouped)
+export_summs(model)
+#The reason for choosing this model is this model used to analyze the relationship between scorecard release and student interest is the difference-in-difference model, which I named model. Number 50000 is the average. Because scorecard was release on the beginning of September,so I chose date 2015-10-01. In the Difference in Differences (DiD) model, the treated group is median salary, the control group is after, also the release of scorecard is the treatment.
+
+```
+
+## Graph
+```{r pressure, echo=FALSE}
+ggplot(indexScore_grouped , aes(month, index, color = treated)) +
+  stat_summary(geom = 'line') +
+  geom_vline(xintercept = as.Date ("2015-10-01")) 
+
+```
+
+## Graph Explanation
+For analytics for the graph, True means the universities where earning is above 50k, False means it is below 50k, So we will state and proves that after the release of scorecard, people looked for school with high earning (>50k) more.
+
+
+## Conclusion
+The impact of high-income college graduates and low-income college graduates on the Google Composite Trends Index after graduation shows that the college scorecard increases over time on the impact, from the model, there are 16% more likely that student will shift their interest into the universities that median income after 6 years of graduation is high. So, we reject the null hypothesis, based on the p-value < 0.001. We could assume that there is no statistically significant evidence that the treatment and control groups have the same level of search after treatment. 
